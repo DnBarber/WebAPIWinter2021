@@ -21,6 +21,28 @@ mongoose.connect('mongodb://localhost:27017/asteroidGame',{
     console.log(err)
 })
 
+//Load in Database Template for Score
+require('./ScoreModel');
+var Score = mongoose.model('score');
+
+//POST Route 
+app.post('/saveHighScore',function(req,res){
+    console.log("Request Made");
+    console.log(req.body);
+
+    new Score(req.body).save().then(function(){
+        res.redirect('scorePage.html');
+    })
+
+});
+
+//Recieves data from database
+app.get('/getData', function(req, res){
+    Score.find({}).then(function(score){
+        res.json({score})
+    })
+})
+
 app.listen(port, function(){
     console.log("Connected on Port 5000");
 });

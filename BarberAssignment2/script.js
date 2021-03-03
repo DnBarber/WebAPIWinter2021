@@ -300,6 +300,7 @@ gameStates[2] = function(){
         ctx.font = "15px Arial";
         ctx.fillText("Press Enter to Start", c.width/2, c.height/2 + 20);
         ctx.restore();
+        SetHighScore(highScore);
 
     }
     else{
