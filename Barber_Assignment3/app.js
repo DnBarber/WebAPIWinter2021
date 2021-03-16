@@ -1,351 +1,463 @@
-const { triggerAsyncId } = require('async_hooks');
-const { setFlagsFromString } = require('v8');
-var express = require('express');
+var express = require("express")
+var app = express()
+var serv = require("http").Server(app)
+var io = require("socket.io")(serv,{})
+var debug = true
+var mongoose = require('mongoose')
+require('./db')
+require('./models/Player')
 
-var app = express();
-var mongoose = require('mongoose');
-const { createBrotliCompress } = require('zlib');
-var serv = require('http').Server(app);
-var io = require('socket.io')(serv, {})
-var debug = true;
+// game declarations
+var gravity = 1;
+var asteroids = new Array();
+var numAsteroids = 10;
+var gameOver = true;
+var score = 0;
+var gameStates = [];
+var currentState = 0;
+var isPlaying = false
+var playerCount = 0
 
-require('./db');
-require('./models/Player');
 
-var PlayerData = mongoose.model('player');
+function randomRange(high, low){
+    return Math.random() * ( high - low) + low;
+}
 
-//File Communication
-app.get('/', function (req, res) {
-    res.sendFile(__dirname + '/client/index.html');
+
+var PlayerData = mongoose.model('player')
+
+//file communication
+app.get('/', function(req, res)
+{
+    res.sendFile(__dirname+'/client/index.html')
 })
 
-app.use('/client', express.static(__dirname + '/client'));
+//server side communication
+app.use('/client', express.static(__dirname+'/client'))
+serv.listen(3000, function()
+{
+    console.log("Connected on localhost 3000")
+})
 
+var SocketList = {}
 
-//Server Side Communication
-serv.listen(3000, function () {
-    console.log('Connected on localhost 3000');
-});
-
-var SocketList = {};
-//var PlayerList = {}
-
-//Class for GameObject
-var GameObject = function(){
-    var self = {
+// class for a gameobject
+var GameObject = function()
+{
+    var self = 
+    {
         x:400,
         y:300,
         spX:0,
         spY:0,
-        id:""
+        id:"",
+       
     }
-    self.update = function(){
-        self.updatePosition();
-    }
-    self.updatePosition = function(){
-        self.x += self.spX;
-        self.y += self.spY;
-    }
-    self.getDist = function(point){
-        return Math.sqrt(Math.pow(self.x - point.x,2)+Math.pow(self.y-point.y,2))
+    self.update = function()
+    {
+        self.updatePosition()
     }
 
-    return self;
+    self.updatePosition = function()
+    {
+        self.x += self.spX
+        self.y += self.spY
+    }
+    self.getDist = function(point)
+    {
+        return Math.sqrt(Math.pow(self.x - point.x, 2) + Math.pow(self.y - point.y, 2))
+    }
+
+    return self
 }
 
-var Player = function(id){
-    var self = GameObject();
-    self.id = id;
-    self.number = Math.floor(Math.random() * 10);
-    self.right = false;
-    self.left = false;
-    self.up = false;
-    self.down = false;
-    self.attack = false;
-    self.mouseAngle = 0;
-    self.speed = 10;
+var Player = function(id)
+{
+    var self = GameObject()
+    self.id = id
+    self.number = Math.floor(Math.random() * 10)
+    self.right = false
+    self.left = false
+    self.up = false
+    self.speed = 5
+    self.width = 20
+    self.height = 20
+    self.vx = 0
+    self.vy = 0
+    self.flameLength = 30
 
-    var playerUpdate = self.update;
+    var playerUpdate = self.update
 
-    self.update = function(){
-        self.updateSpeed();
-        playerUpdate();
+    self.update = function()
+    {
+        self.updateSpeed()
+        playerUpdate()
 
-        //if(Math.random() < 0.1){
-            //self.shoot(Math.random() * 360);
-        //}
-        if(self.attack){
-            self.shoot(self.mouseAngle);
+    }
+
+    self.updateSpeed = function()
+    {
+        // left and right
+        if(self.right && self.x < 780)
+        {
+            self.spX = self.speed
         }
-    }
-
-    self.shoot = function(angle){
-        var b = Bullet(self.id,angle);
-        b.x = self.x;
-        b.y = self.y;
-    }
-
-    self.updateSpeed = function(){
-        if(self.right){
-            self.spX = self.speed;
-        } else if(self.left){
-            self.spX = -self.speed;
-        } else {
+        else if(self.left && self.x > 0)
+        {
+            self.spX = -self.speed
+        }
+        else
+        {
             self.spX = 0;
         }
+        // up and down
+        if(self.up && self.y > 20)
+        {
+            self.spY = -self.speed
+        }
+        else
+        {
+            if(self.y < 590)
+            {
+                self.spY = 3;
+            }
+            else
+            {
+                self.spY = 0
+            }
 
-        if(self.up){
-            self.spY = -self.speed;
-        } else if(self.down){
-            self.spY = self.speed;
-        } else {
-            self.spY = 0;
         }
     }
 
-    Player.list[id]= self;
+    Player.list[id] = self
 
-    return self;
+    return self
 }
 
-Player.list = {};
+Player.list = {}
 
-//List of functions for player connection & movement
-Player.onConnect = function(socket){
-    var player = new Player(socket.id);
+// list of functions for player connection and movement
+Player.onConnect = function(socket)
+{
+    playerCount++
+    var player = new Player(socket.id)
+        // receive the player inputs
+        socket.on('keypress', function(data)
+        {
+            if(data.inputId === 'up')
+            {
+                player.up = data.state
+            }
 
-     //Recieve Player Input
-     socket.on('keypress', function(data){
-        if(data.inputId === 'up'){
-            player.up = data.state;
-        }
-        if(data.inputId === 'down'){
-            player.down = data.state;
-        }
-        if(data.inputId === 'right'){
-            player.right = data.state;
-        }
-        if(data.inputId === 'left'){
-            player.left = data.state;
-        }2
-        if(data.inputId === 'attack'){
-            player.attack = data.state;
-        }
-        if(data.inputId === 'mouseAngle'){
-            player.mouseAngle = data.state;
-        }
-    })
+            if(data.inputId === 'left')
+            {
+                player.left = data.state
+            }
+            if(data.inputId === 'right')
+            {
+                player.right = data.state
+            }
+            if(data.inputId === 'enter')
+            {
+                if(isPlaying == false)
+                {
+                    gameStart()
+                }
+                isPlaying = true;
+            }
 
-}
-
-Player.onDisconnect = function(socket){
-    delete Player.list[socket.id];
-}
-
-Player.update = function(){
-    var pack = []
-    for (var i in Player.list) {
-        var player = Player.list[i];
-        player.update()
-        pack.push({
-            x: player.x,
-            y: player.y,
-            number: player.number,
-            id:player.id
         })
+}
+
+//On disconnect remove player from count and delete them from the list
+Player.onDisconnect = function(socket)
+{
+    playerCount--
+    delete Player.list[socket.id]
+}
+
+//Update the player
+Player.update = function()
+{
+    var pack = []
+    for(var i in Player.list)
+    {
+        var player = Player.list[i]
+        player.update()   
+        pack.push(
+            {
+                x:player.x,
+                y:player.y,
+                number:player.number,
+                id:player.id,
+            })  
     }
+
     return pack
 }
 
-var Bullet = function(parent, angle){
-    var self = GameObject();
-    self.id = Math.random();
-    self.spX = Math.cos(angle/180 * Math.PI) * 10;
-    self.spY = Math.sin(angle/180 * Math.PI) * 10;
-    self.parent = parent;
+var Asteroid = function()
+{
+    var self = GameObject()
+    self.radius = randomRange(15,2)
+    self.x = randomRange(0 + self.radius, 800 - self.radius); 
+    self.y = randomRange(0 + self.radius, 600 - self.radius)- 600;
 
-    self.timer = 0;
-    self.toRemove = false;
+    self.id = Math.random()
+    self.spX = 0;
+    self.spY = randomRange(1,5);
+    self.color = "white"
+    self.score = 0
 
-    var bulletUpdate = self.update;
-    self.update = function(){
-        if(self.timer++ > 100){
-            self.toRemove = true;
-        }
-        bulletUpdate();
-        for(var i in Player.list){
-            var p = Player.list[i];
-            if(self.getDist(p)<25 && self.parent !== p.id){
-                self.toRemove = true;
-                //Damage or HP
+    var asteroidUpdate = self.update
+    self.update = function()
+    {
+        asteroidUpdate()
+ 
+    }
+    Asteroid.list[self.id] = self
+    return self
+}
+
+Asteroid.list = {}
+
+Asteroid.update = function()
+{
+    var pack = []
+    for(var i in Asteroid.list)
+    {
+        var asteroid = Asteroid.list[i]
+        asteroid.update()   
+
+        //checks for collision between asteroid and ship
+        for(var i in Player.list)
+        {
+            var dX = Player.list[i].x - asteroid.x;
+            var dY = Player.list[i].y - asteroid.y;
+            var dist = Math.sqrt((dX*dX)+(dY*dY));
+
+            if(detectCollision(dist, (Player.list[i].height/2 + asteroid.radius)))
+            {
+                // gameOver = true
+                console.log("Collision!")
+                delete Player.list[i]
+                playerCount--
+
+                if(playerCount <= 0)
+                {
+                    // all players are dead
+                    // end the game
+                    console.log("Game Over")
+                }
+
             }
         }
+
+
+        if(asteroid.toRemove)
+        {
+            delete Asteroid.list[i]
+        }
+        else
+        {
+            pack.push(
+            {
+                x:asteroid.x,
+                y:asteroid.y,
+                radius:asteroid.radius,
+                score:asteroid.score
+            })  
+        }
+ 
     }
-    Bullet.list[self.id] = self;
-    return self;
+
+    return pack
 }
 
-Bullet.list = {};
+//Create Asteroid
+Asteroid.Create = function()
+{
 
-Bullet.update = function(){
-    //Create bullets
-    //if(Math.random() < 0.1){
-        //Bullet(Math.random() * 360);
-    //}
-
-    var pack = []
-    for (var i in Bullet.list) {
-        var bullet = Bullet.list[i];
-        bullet.update()
-        if(bullet.toRemove){
-            delete Bullet.list[i];
-        } else {
-            pack.push({
-                x: bullet.x,
-                y: bullet.y,
-            })
-        }
+    for (var i = 0; i < numAsteroids; i++) 
+    {
+        asteroids[i] = new Asteroid();
     }
-    return pack
 }
 
 //User Collection Setup
-var Players = {
-    "Matt":"123",
+var Players = 
+{
+    "Mat":"123",
     "Rob":"asd",
     "Ron":"321",
-    "Jay":"ewq"
+    "Jay":"ewq",
 }
 
-var isPasswordValid = function(data,cb){
-    PlayerData.findOne({username:data.username},function(err,username){
-        cb(data.password == username.password);
-    });
+//Check if the password matches to the user
+var isPasswordValid = function(data,cb)
+{
+    PlayerData.findOne({username:data.username}, function(err, username)
+    {
+        cb(data.password == username.password)
+    })
+
 }
 
-var isUsernameTaken = function(data,cb){
-    PlayerData.findOne({username:data.username},function(err,username){
-        if(username == null){
+//Checks if the username is taken 
+var isUsernameTaken = function(data, cb)
+{
+    PlayerData.findOne({username:data.username}, function(err,username)
+    {
+        if(username == null)
+        {
             cb(false)
-        } else {
+        }
+        else
+        {
             cb(true)
         }
     })
-    //return Players[data.username];
 }
 
-var addUser = function(data){
-    //Players[data.username] = data.password
+var addUser = function(data)
+{
     new PlayerData(data).save()
 }
 
-//Connection to Game
-io.sockets.on('connection', function (socket) {
-    console.log("Socket Connected");
+function gameStart()
+{
+    Asteroid.Create()
+}
 
-    socket.id = Math.random();
-    //socket.x = 0;
-    //socket.y = Math.floor(Math.random() * 600);
-    //socket.number = Math.floor(Math.random() * 10);
+// connection to game
+io.sockets.on('connection', function(socket)
+{
+    console.log("Socket Connected")
 
-    //Add Something to SocketList
-    SocketList[socket.id] = socket;
+    socket.id = Math.random()
 
-    //var player = new Player(socket.id);
-    //PlayerList[socket.id] = player;
+    //add something to SocketList
+    SocketList[socket.id] = socket
+ 
 
-    //Sign In Event
-    socket.on('signIn', function(data){
+    // signIn event
+    socket.on("signIn", function(data)
+    {
+        isPasswordValid(data, function(res)
+        {
+            if(res)
+            {
+                Player.onConnect(socket)
+                socket.emit('connected', socket.id)
+                socket.emit('signInResponse', {success: true})
+                
+            }
+            else
+            {
+                socket.emit('signInResponse', {success: false})
+                
+            }
+        })
 
-        /*if(isPasswordValid(data)){
-            Player.onConnect(socket);
-            //Sends the id to the client
-            socket.emit('connected', socket.id);
-            socket.emit('signInResponse', {success:true});
-        } else {
-            socket.emit('signInResponse', {success:false});
-        }*/
+    })
 
-        isPasswordValid(data,function(res){
-            if(res){
-                Player.onConnect(socket);
-                socket.emit('connected',socket.id)
-                socket.emit('signInResponse',{success:true})
-            }else {
-                socket.emit('signInResponse',{success:false})
+    // signUp event
+    socket.on('signUp', function(data)
+    {
+        isUsernameTaken(data, function(res)
+        {
+            if(res)
+            {
+                socket.emit('signUpResponse', {success:false})
+            }
+            else
+            {
+                addUser(data)
+                socket.emit('signUpResponse', {success:true})
             }
         })
     })
 
-     //Sign Up Event
-     socket.on('signUp', function(data){
 
-        isUsernameTaken(data, function(res){
-            if(res){
-                socket.emit('signUpResponse',{success:false})
-            } else {
-                addUser(data);
-                socket.emit('signUpResponse',{success:true})
-            }
-        })
-
-        /*if(isUsernameTaken(data)){
-            socket.emit('signUpResponse',{success:false})
-        } else {
-            addUser(data);
-            socket.emit('signUpResponse',{success:true})
-        }*/
-
+    // disconnection event
+    socket.on("disconnect", function()
+    {
+        delete SocketList[socket.id]
+        Player.onDisconnect(socket)
     })
 
-    //Disconnection Event
-    socket.on('disconnect', function(){
-        delete SocketList[socket.id];
-        Player.onDisconnect(socket);
-    })
-
-    //Handling chat event
-    socket.on('sendMessageToServer', function(data){
-        var playerName = (" " + socket.id).slice(2,7);
-        for(var i in SocketList){
-            SocketList[i].emit('addToChat', playerName + ": " + data);
+    // handling chat event
+    socket.on("sendMessageToServer", function(data)
+    {
+        var playerName = (" " + socket.id).slice(2,7)
+        for(var i in SocketList)
+        {
+            SocketList[i].emit('addToChat', playerName + ": " + data)
         }
     })
-
-    //Debug Stuff
-    socket.on('evalServer', function(data){
-        if(!debug){
-            return;
+    socket.on("evalServer", function(data)
+    {
+        if(!debug)
+        {
+            return
         }
-        var res = eval(data);
-        socket.emit('evalResponse', res);
+        var res = eval(data)
+        socket.emit('evalResponse', res)
     })
 
-    // socket.on('sendMsg', function (data) {
-    //     console.log(data.message);
-    // });
+})
 
-    // socket.on('sendBtnMsg',function(data){
-    //     console.log(data.message);
-    // })
+//---Collision Detection Function---
+function detectCollision(distance, calcDistance){
+    return distance < calcDistance;
+}
 
-    // socket.emit('messageFromServer', {
-    //     message: "Hey Devin Welcome to the party"
-    // })
-});
+// setup update loop
+setInterval(function()
+{
+    for(var i in asteroids)
+    {
+        if(asteroids[i].y > 625)
+        {
+            asteroids[i].spY = randomRange(1,5)
+            asteroids[i].radius = randomRange(15,2)
+            asteroids[i].x = randomRange(0 + asteroids[i].radius, 800 - asteroids[i].radius); 
+            asteroids[i].y = randomRange(0 + asteroids[i].radius, 600 - asteroids[i].radius)- 600;
+            asteroids[i].score++
 
-//Setup Update Loop
-setInterval(function () {
-
-    var pack = {
-        player:Player.update(),
-        bullet:Bullet.update()
-    }
-   //var pack = Player.update();
-
-    for (var i in SocketList) {
-        var socket = SocketList[i];
-        socket.emit('newPositions', pack)
+        }
     }
 
-}, 1000 / 30);
+    var pack = 
+    {
+        player: Player.update(),
+        asteroid: Asteroid.update()
+
+    }
+    //var pack = Player.update()
+    //Player.update()
+
+    for(var i in SocketList)
+    {
+        var socket = SocketList[i]
+        socket.emit('newPosition', pack)
+        
+    }
+
+}, 1000/30)
+
+
+//--Score Timer Function---
+function scoreTimer(){
+    if(gameOver == false){
+        score++;
+        //using modulus divide the score by 5 and if the remainder is zero add asteroid
+        if(score % 5 == 0){
+            numAsteroids += 5;
+            console.log(numAsteroids);
+        }
+       // console.log(score);
+        setTimeout(scoreTimer, 1000);
+    }
+}
+

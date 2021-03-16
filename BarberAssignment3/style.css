@@ -1,0 +1,23 @@
+div {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  color:white;
+}
+body{
+
+    background-image: url("images/rocks2.png");
+}
+h1{
+    color:white;
+}
+
+nav {
+    border-top: 2px solid black;
+    border-left: 2px solid black;
+    border-right: 2px solid black;
+    border-bottom: 2px solid black;
+    padding: 5px;
+} 
