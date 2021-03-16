@@ -446,7 +446,6 @@ setInterval(function()
 
 }, 1000/30)
 
-
 //--Score Timer Function---
 function scoreTimer(){
     if(gameOver == false){
